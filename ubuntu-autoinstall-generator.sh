@@ -141,7 +141,7 @@ ubuntu_gpg_key_id="843938DF228D22F7B3742BC0D94AA3F0EFE21092"
 
 parse_params "$@"
 
-tmpdir=$(mktemp -d)
+tmpdir=$(mktemp -d -p "${TMPDIR:-$PWD}")
 
 if [[ ! "$tmpdir" || ! -d "$tmpdir" ]]; then
         die "💥 Could not create temporary working directory."
@@ -150,11 +150,17 @@ else
 fi
 
 log "🔎 Checking for required utilities..."
-[[ ! -x "$(command -v xorriso)" ]] && die "💥 xorriso is not installed. On Ubuntu, install  the 'xorriso' package."
-[[ ! -x "$(command -v sed)" ]] && die "💥 sed is not installed. On Ubuntu, install the 'sed' package."
-[[ ! -x "$(command -v curl)" ]] && die "💥 curl is not installed. On Ubuntu, install the 'curl' package."
-[[ ! -x "$(command -v gpg)" ]] && die "💥 gpg is not installed. On Ubuntu, install the 'gpg' package."
-[[ ! -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]] && die "💥 isolinux is not installed. On Ubuntu, install the 'isolinux' package."
+missing_pkgs=()
+[[ ! -x "$(command -v xorriso)" ]] && missing_pkgs+=("xorriso")
+[[ ! -x "$(command -v sed)" ]] && missing_pkgs+=("sed")
+[[ ! -x "$(command -v curl)" ]] && missing_pkgs+=("curl")
+[[ ! -x "$(command -v gpg)" ]] && missing_pkgs+=("gpg")
+[[ ! -f "/usr/lib/ISOLINUX/isohdpfx.bin" ]] && missing_pkgs+=("isolinux")
+if [ "${#missing_pkgs[@]}" -ne 0 ]; then
+        log "💥 Missing utilities: ${missing_pkgs[*]}"
+        log "📥 \033[32mapt install -y ${missing_pkgs[*]}\033[0m"
+        die "Please install the missing packages and try again." 1
+fi
 log "👍 All required utilities are installed."
 
 if [ ! -f "${source_iso}" ]; then
@@ -228,7 +234,9 @@ if [ ${use_hwe_kernel} -eq 1 ]; then
 fi
 
 log "🧩 Adding autoinstall parameter to kernel command line..."
-sed -i -e 's/---/ autoinstall  ---/g' "$tmpdir/isolinux/txt.cfg"
+if [ -f "$tmpdir/isolinux/txt.cfg" ]; then
+        sed -i -e 's/---/ autoinstall  ---/g' "$tmpdir/isolinux/txt.cfg"
+fi
 sed -i -e 's/---/ autoinstall  ---/g' "$tmpdir/boot/grub/grub.cfg"
 sed -i -e 's/---/ autoinstall  ---/g' "$tmpdir/boot/grub/loopback.cfg"
 log "👍 Added parameter to UEFI and BIOS kernel command lines."
@@ -242,29 +250,67 @@ if [ ${all_in_one} -eq 1 ]; then
         else
                 touch "$tmpdir/nocloud/meta-data"
         fi
-        sed -i -e 's,---, ds=nocloud;s=/cdrom/nocloud/  ---,g' "$tmpdir/isolinux/txt.cfg"
+        if [ -f "$tmpdir/isolinux/txt.cfg" ]; then
+                sed -i -e 's,---, ds=nocloud;s=/cdrom/nocloud/  ---,g' "$tmpdir/isolinux/txt.cfg"
+        fi
         sed -i -e 's,---, ds=nocloud\\\;s=/cdrom/nocloud/  ---,g' "$tmpdir/boot/grub/grub.cfg"
         sed -i -e 's,---, ds=nocloud\\\;s=/cdrom/nocloud/  ---,g' "$tmpdir/boot/grub/loopback.cfg"
         log "👍 Added data and configured kernel command line."
 fi
 
-if [ ${md5_checksum} -eq 1 ]; then
-        log "👷 Updating $tmpdir/md5sum.txt with hashes of modified files..."
-        md5=$(md5sum "$tmpdir/boot/grub/grub.cfg" | cut -f1 -d ' ')
-        sed -i -e 's,^.*[[:space:]] ./boot/grub/grub.cfg,'"$md5"'  ./boot/grub/grub.cfg,' "$tmpdir/md5sum.txt"
-        md5=$(md5sum "$tmpdir/boot/grub/loopback.cfg" | cut -f1 -d ' ')
-        sed -i -e 's,^.*[[:space:]] ./boot/grub/loopback.cfg,'"$md5"'  ./boot/grub/loopback.cfg,' "$tmpdir/md5sum.txt"
-        log "👍 Updated hashes."
+# Drop the undocumented grub_platform guard. It is not a real
+# GRUB command on Ubuntu 26.04 and just emits "error: cannot find
+# command `grub_platform`" on some UEFI firmware; the installer
+# still continues. The guarded block only shows extra UEFI/BIOS
+# menu entries so removing it is safe.
+log "🧹 Cleaning grub.cfg to remove grub_platform error..."
+if [ -f "$tmpdir/boot/grub/grub.cfg" ]; then
+        # Remove the grub_platform line and the entire if-else-fi block that follows it
+        sed -i '/^grub_platform$/d' "$tmpdir/boot/grub/grub.cfg"
+        sed -i '/if \[ "\$grub_platform" = "efi" \]; then/,/^fi$/d' "$tmpdir/boot/grub/grub.cfg"
+        # Also clean loopback.cfg if present
+        if [ -f "$tmpdir/boot/grub/loopback.cfg" ]; then
+                sed -i '/^grub_platform$/d' "$tmpdir/boot/grub/loopback.cfg"
+                sed -i '/if \[ "\$grub_platform" = "efi" \]; then/,/^fi$/d' "$tmpdir/boot/grub/loopback.cfg"
+        fi
+        # Make the first menu entry (Autoinstall) the default and reduce timeout
+        sed -i 's/^set timeout=.*/set timeout=5/' "$tmpdir/boot/grub/grub.cfg" || true
+        sed -i 's/^set default=.*/set default=0/' "$tmpdir/boot/grub/grub.cfg" || true
+        # If timeout/default not present, prepend them
+        if ! grep -q '^set timeout=' "$tmpdir/boot/grub/grub.cfg"; then
+                sed -i '1i set timeout=5\nset default=0' "$tmpdir/boot/grub/grub.cfg"
+        fi
+        log "👍 Cleaned grub.cfg (removed grub_platform and set default timeout)."
+fi
+
+if [ -f "$tmpdir/md5sum.txt" ]; then
+        if [ ${md5_checksum} -eq 1 ]; then
+                log "👷 Updating $tmpdir/md5sum.txt with hashes of modified files..."
+                md5=$(md5sum "$tmpdir/boot/grub/grub.cfg" | cut -f1 -d ' ')
+                sed -i -e 's,^.*[[:space:]] ./boot/grub/grub.cfg,'"$md5"'  ./boot/grub/grub.cfg,' "$tmpdir/md5sum.txt"
+                md5=$(md5sum "$tmpdir/boot/grub/loopback.cfg" | cut -f1 -d ' ')
+                sed -i -e 's,^.*[[:space:]] ./boot/grub/loopback.cfg,'"$md5"'  ./boot/grub/loopback.cfg,' "$tmpdir/md5sum.txt"
+                log "👍 Updated hashes."
+        else
+                log "🗑️ Clearing MD5 hashes..."
+                echo > "$tmpdir/md5sum.txt"
+                log "👍 Cleared hashes."
+        fi
 else
-        log "🗑️ Clearing MD5 hashes..."
-        echo > "$tmpdir/md5sum.txt"
-        log "👍 Cleared hashes."
+        log "🗑️ No md5sum.txt in source ISO (Ubuntu 24.04+), skipping MD5 step."
 fi
 
 log "📦 Repackaging extracted files into an ISO image..."
 cd "$tmpdir"
-xorriso -as mkisofs -r -V "ubuntu-autoinstall-$today" -J -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin -boot-info-table -input-charset utf-8 -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot -isohybrid-gpt-basdat -o "${destination_iso}" . &>/dev/null
+if [ -f "$tmpdir/boot/grub/i386-pc/eltorito.img" ] && [ -f "$tmpdir/EFI/boot/grubx64.efi" ]; then
+        # Modern Ubuntu (24.04+/26.04) - pure GRUB
+        xorriso -as mkisofs -r -V "ubuntu-autoinstall-$today" -J -b boot/grub/i386-pc/eltorito.img -no-emul-boot -boot-load-size 4 -boot-info-table --grub2-boot-info --grub2-mbr /usr/lib/ISOLINUX/isohdpfx.bin -eltorito-alt-boot -e EFI/boot/grubx64.efi -no-emul-boot -isohybrid-gpt-basdat -o "${destination_iso}" . &>/dev/null
+else
+        # Legacy Ubuntu (20.04/22.04) - isolinux + GRUB
+        xorriso -as mkisofs -r -V "ubuntu-autoinstall-$today" -J -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin -boot-info-table -input-charset utf-8 -eltorito-alt-boot -e boot/grub/efi.img -no-emul-boot -isohybrid-gpt-basdat -o "${destination_iso}" . &>/dev/null
+fi
 cd "$OLDPWD"
 log "👍 Repackaged into ${destination_iso}"
 
 die "✅ Completed." 0
+

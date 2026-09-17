@@ -2,6 +2,20 @@
 A script to generate a fully-automated ISO image for installing Ubuntu onto a machine without human interaction. This uses the new autoinstall method
 for Ubuntu 20.04 and newer.
 
+### Quick start (Ubuntu 26.04)
+Run the script from the directory that contains your source ISO and user-data file. The temp working directory will be created in the current directory, so make sure it has at least 5 GB free:
+```
+./ubuntu-autoinstall-generator.sh \
+  -a \
+  -u ./user-data.yaml \
+  -s ./ubuntu-26.04.1-live-server-amd64.iso \
+  -d ./ubuntu-26.04.1-live-server-amd64-autoinstall.iso \
+  -k
+```
+The `-a` flag bakes the user-data (and an empty meta-data) into the generated ISO so the installer runs unattended with no extra CIDATA volume. The `-k` flag skips the GPG check of the source ISO; drop it if you want to verify the download against Ubuntu's signing key.
+
+See `user-data.yaml.example` for an autoinstall config with Chinese-region tweaks (Asia/Shanghai timezone, aliyun apt mirror).
+
 ## [Looking for the desktop version?](https://github.com/covertsh/ubuntu-preseed-iso-generator)
 
 ### Behavior

@@ -1,0 +1,42 @@
+#cloud-config
+# Ubuntu Server autoinstall example with Chinese-region tuning:
+# - timezone: Asia/Shanghai
+# - apt mirror: mirrors.aliyun.com
+#
+# Replace the placeholder password hash and SSH public keys before running
+# the generator.
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+    variant: ''
+  timezone: Asia/Shanghai
+  # Skip every "Continue?" confirmation page in subiquity so the install is
+  # fully unattended. See https://ubuntu.com/server/docs/install/autoinstall-reference
+  interactive-sections: []
+  apt:
+    primary:
+      - arches: [amd64]
+        uri: https://mirrors.aliyun.com/ubuntu
+  storage:
+    layout:
+      name: direct
+  identity:
+    hostname: ubuntu-server
+    username: ubuntu
+    realname: ubuntu
+    # openssl passwd -6 -salt $(openssl rand -hex 8) 'ubuntu'
+    password: "$6$exDY1mhS4KUYCE/2$zmn9ToZwTKLhCw.b4/b.ZRTIZM30JZ4QrOQ2aOXJ8yk96xpcCof0kxKwuX1kqLG/ygbJ1f8wxED22bTL4F46P0"
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys:
+      # Replace with your own public keys (e.g. `cat ~/.ssh/id_ed25519.pub`).
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderReplaceWithYourOwnPublicKey ubuntu@localhost
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAnotherPlaceholderReplaceWithYourOwnPublicKey ops@workstation
+  packages:
+    - curl
+    - vim
+    - git
+    - htop
